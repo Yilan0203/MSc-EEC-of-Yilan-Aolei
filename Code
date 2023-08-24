@@ -1,0 +1,178 @@
+#This is Yilan's final project R script.
+#This code is just for repeating result
+#The code for plots with the same style is provided only once
+#Modify the colour palette for an identical output.
+rm(list=ls())
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(wesanderson)
+library(broom)
+library(readr)
+library(growthcurver)
+
+#Bacteria growth AUC
+read.data=read.table("OD_for_AUC.csv", header = TRUE, sep = ",",nrows = 37)
+gc_out<-SummarizeGrowthByPlate(
+  read.data,
+  t_trim = 0,
+  bg_correct = "min",
+  plot_fit = TRUE,
+  plot_file = "growthcurver.pdf"
+)
+head(gc_out)
+output_file_name <- "YOUR FILE PATH"
+write.table(gc_out, file = output_file_name, 
+            quote = FALSE, sep = "\t", row.names = FALSE)
+
+#Phage Titre
+Phage_titre=read.table("Phage Titre.csv", header = TRUE, sep = ",")
+Phage_titre_plot <- ggplot(Phage_titre, aes(x = Temp, y = Titre, color=Phage)) +
+  geom_jitter(width = 0.4, alpha = 0.5,size=1.5)+
+  geom_smooth(method = "loess", se = TRUE, fill="grey")+
+  scale_color_manual(values=wes_palette(n=3, name="Moonrise3"))+
+  labs(x = "Temperature", y = "Phage replication rate") +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90))
+Phage_titre_plot
+
+#Bacteria growth
+#cubic polynomial model
+rm(list=ls())
+# Load the data
+data_only <- read.csv("Relative Growth Temp.csv", header = TRUE, sep = ",")
+# Fit the data to a non-orthogonal cubic polynomial model
+model_non_orthogonal <- lm(AUC_without ~ I(Temp^3) + I(Temp^2) + Temp, data=data_only)
+
+summary(model_non_orthogonal)
+
+# Extract coefficients from the non-orthogonal model
+coefs_non_orthogonal <- coefficients(model_non_orthogonal)
+
+coefs_non_orthogonal
+# Order of coefficients is: (Intercept), Temp, I(Temp^2), I(Temp^3)
+a <- coefs_non_orthogonal["I(Temp^3)"]
+b <- coefs_non_orthogonal["I(Temp^2)"]
+c <- coefs_non_orthogonal["Temp"]
+
+# Calculate the discriminant for the derivative
+discriminant <- (2*b)^2 - 4*3*a*c
+
+# Check if the discriminant is non-negative and solve for T
+if(discriminant >= 0) {
+  root1 <- (-2*b + sqrt(discriminant)) / (2*3*a)
+  root2 <- (-2*b - sqrt(discriminant)) / (2*3*a)
+  root_only <- c(root1, root2)
+} else {
+  roots <- NA
+}
+
+root_only
+
+
+# Create a new data frame with the temperatures for which we want predictions
+newdata <- data.frame(Temp = root_only)
+
+# Predict AUC values and 95% confidence intervals for the new data
+predictions<- predict(model_non_orthogonal, newdata, interval="confidence", level=0.95)
+
+# Extract the lower and upper bounds of the confidence intervals
+lwr_confidence <- predictions[, "lwr"]
+upr_confidence <- predictions[, "upr"]
+
+
+# Combine the predictions and confidence intervals
+results <- data.frame(Temperature=root_only, Predicted_AUC=predictions[, "fit"], Lower_95CI=lwr_confidence, Upper_95CI=upr_confidence)
+
+results
+
+# Number of simulations
+n_sims <- 1000
+
+# Store the temperatures where the derivative is zero
+temps <- numeric(n_sims)
+
+# Extract standard errors for the coefficients from the model
+se<- summary(model_non_orthogonal)$coefficients[, "Std. Error"]
+
+for (i in 1:n_sims) {
+  # Sample from the normal distribution for each coefficient
+  a_sampled <- rnorm(1, mean=a, sd=se["I(Temp^3)"])
+  b_sampled <- rnorm(1, mean=b, sd=se["I(Temp^2)"])
+  c_sampled <- rnorm(1, mean=c, sd=se["Temp"])
+  
+  # Calculate the temperature where the derivative is zero using the sampled coefficients
+  discriminant_sampled<- (2*b_sampled)^2 - 4*3*a_sampled*c_sampled
+  if(discriminant_sampled >= 0) {
+    root_sampled <- (-2*b_sampled - sqrt(discriminant_sampled)) / (2*3*a_sampled) # Take the negative square root for the local maximum
+    temps[i] <- root_sampled
+  } else {
+    temps[i] <- NA
+  }
+}
+
+# Calculate the 95% confidence interval for the temperatures
+conf_interval_temps <- quantile(temps, c(0.025, 0.975), na.rm=TRUE)
+
+conf_interval_temps
+
+# Generate a sequence of temperatures for predictions
+temp_seq <- seq(min(data_only$Temp), max(data_only$Temp), length.out=1000)
+new_data <- data.frame(Temp=temp_seq)
+
+# Predict AUC values and 95% confidence intervals for the sequence of temperatures
+predictions <- predict(model_non_orthogonal, new_data, interval="confidence", level=0.95)
+
+# Combine predictions and confidence intervals with the sequence of temperatures
+predicted_data <- data.frame(Temperature=temp_seq, Predicted_AUC=predictions[, "fit"], 
+                             Lower_95CI=predictions[, "lwr"], Upper_95CI=predictions[, "upr"])
+
+# Plot
+ggplot(data=data_only) +
+  geom_point(aes(x=Temp, y=Titre), alpha=0.5) +
+  geom_line(data=predicted_data, aes(x=Temperature, y=Predicted_AUC), color="blue") +
+  geom_ribbon(data=predicted_data, aes(x=Temperature, ymin=Lower_95CI, ymax=Upper_95CI), fill="blue", alpha=0.2) +
+  labs( x="Temperature", y="Phage Titre") +
+  theme_minimal()
+
+#Relative growth for bacteria
+Relative_Plot <- ggplot(Relative Growth Temp, aes(x = Temp, y = Relative.Growth, color=Bac,
+fill = factor(Temp)),bxp.errorbar=T,bxp.errorbar.width=0.5) +
+  geom_jitter(width = 0.4, alpha = 0.5)+
+  geom_smooth(method = "loess", se = TRUE, fill="grey")+
+  ylim(0,1.5)+
+  geom_hline(yintercept = 1, linetype = "dotted") +
+  labs(x = "Temperature", y = "Relative Growth (G)") +
+  facet_wrap(~Phage, scales = "free_y") +
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = "none")
+
+#Linear model for both tempereature and chemical experiments
+#The Topts were calculate by above codes
+stats_model <- read.csv("Model_input.csv", header = TRUE, sep = ",")
+model <- lm(Topt ~ Phage*Phage_Type , data=stats_model)
+summary(model)
+
+# Create a boxplot
+plot_stats <- ggplot(stats_model, aes(x=Phage_Type, y=Topt, fill=Phage_Type)) + 
+  geom_boxplot() + 
+  labs(x="Phage Type", 
+       y="Optimal Temperature") +
+  theme_minimal() +
+  scale_fill_brewer(palette="Pastel1")
+pplot_stats
+
+#Chemical experiments boxplot
+Relative_growth_chemicals <- read.csv("Relative_growth_chemicals", header = TRUE, sep = ",")
+stressor_plot <- ggplot(Relative_growth_chemicals, aes(x = Phage, y = Relative_Growth, fill = Phage)) +
+  geom_boxplot() +
+  ylim(0.3,1.1)+
+  geom_hline(yintercept = 1, linetype = "dotted") +
+  geom_hline(yintercept = 0.8, linetype = "dotted",color="red") +
+  labs(x = "Chemicals", y = "Relative Growth (G)") +
+  facet_wrap(~Chemical, scales = "free_y") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90),
+        legend.position = "none")
+stressor_plot
